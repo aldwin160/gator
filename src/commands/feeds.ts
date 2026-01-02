@@ -1,59 +1,51 @@
-import { createFeed, getFeeds } from "../lib/db/queries/feeds";
-import { getUserById } from "../lib/db/queries/users";
-import { Feed, User } from "src/lib/db/schema";
-import { createFeedFollow } from "src/lib/db/queries/feed-follows";
-import { printFeedFollow } from "./feed-follows";
+import { eq, sql } from "drizzle-orm";
+import { db } from "..";
+import { feeds } from "../schema";
+import { firstOrUndefined } from "./utils";
 
-export async function handlerAddFeed(
-  cmdName: string,
-  user: User,
-  ...args: string[]
+export async function createFeed(
+  feedName: string,
+  url: string,
+  userId: string,
 ) {
-  if (args.length !== 2) {
-    throw new Error(`usage: ${cmdName} <feed_name> <url>`);
-  }
+  const result = await db
+    .insert(feeds)
+    .values({
+      name: feedName,
+      url,
+      userId,
+    })
+    .returning();
 
-  const feedName = args[0];
-  const url = args[1];
-
-  const feed = await createFeed(feedName, url, user.id);
-  if (!feed) {
-    throw new Error(`Failed to create feed`);
-  }
-
-  const feedFollow = await createFeedFollow(user.id, feed.id);
-
-  printFeedFollow(user.name, feedFollow.feedName);
-
-  console.log("Feed created successfully:");
-  printFeed(feed, user);
+  return firstOrUndefined(result);
 }
 
-function printFeed(feed: Feed, user: User) {
-  console.log(`* ID:            ${feed.id}`);
-  console.log(`* Created:       ${feed.createdAt}`);
-  console.log(`* Updated:       ${feed.updatedAt}`);
-  console.log(`* name:          ${feed.name}`);
-  console.log(`* URL:           ${feed.url}`);
-  console.log(`* User:          ${user.name}`);
+export async function getFeeds() {
+  const result = await db.select().from(feeds);
+  return result;
 }
 
-export async function handlerListFeeds(_: string) {
-  const feeds = await getFeeds();
+export async function getFeedByURL(url: string) {
+  const result = await db.select().from(feeds).where(eq(feeds.url, url));
+  return firstOrUndefined(result);
+}
 
-  if (feeds.length === 0) {
-    console.log(`No feeds found.`);
-    return;
-  }
+export async function markFeedFetched(feedId: string) {
+  const result = await db
+    .update(feeds)
+    .set({
+      lastFetchAt: new Date(),
+    })
+    .where(eq(feeds.id, feedId))
+    .returning();
+  return firstOrUndefined(result);
+}
 
-  console.log(`Found %d feeds:\n`, feeds.length);
-  for (let feed of feeds) {
-    const user = await getUserById(feed.userId);
-    if (!user) {
-      throw new Error(`Failed to find user for feed ${feed.id}`);
-    }
-
-    printFeed(feed, user);
-    console.log(`=====================================`);
-  }
+export async function getNextFeedToFetch() {
+  const result = await db
+    .select()
+    .from(feeds)
+    .orderBy(sql`${feeds.lastFetchAt} desc nulls first`)
+    .limit(1);
+  return firstOrUndefined(result);
 }
